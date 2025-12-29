@@ -69,3 +69,20 @@ exports.login = async (req, res) => {
 exports.getMe = async (req, res) => {
   res.json(req.user);
 };
+
+
+// ✅ UPDATE PROFILE (name + phone)
+exports.updateMe = async (req, res) => {
+  const { name, phone } = req.body;
+
+  const user = await User.findById(req.user._id);
+  if (!user) return res.status(404).json({ message: "User not found" });
+
+  if (typeof name === "string") user.name = name;
+  if (typeof phone === "string") user.phone = phone;
+
+  await user.save();
+
+  const safeUser = await User.findById(user._id).select("-password");
+  res.json(safeUser);
+};
