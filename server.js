@@ -12,6 +12,11 @@ const propertyRoutes = require('./routes/properties');
 const reviewRoutes = require('./routes/reviews');
 const subscriptionRoutes = require('./routes/subscriptions');
 const searchRoutes = require('./routes/search');
+const favoriteRoutes = require('./routes/favorites');
+const analyticsRoutes = require('./routes/analytics');
+const hostProfilesRoutes =require("./routes/hostProfiles.js") ;
+const hostMessagesRoutes = require("./routes/hostMessages");
+
 
 connectDB();
 
@@ -24,9 +29,14 @@ app.use(morgan('dev'));
 app.use('/auth', authRoutes);
 app.use('/users', userRoutes);
 app.use('/properties', propertyRoutes);
-app.use('/reviews', reviewRoutes);
+app.use('/properties', reviewRoutes);
 app.use('/subscriptions', subscriptionRoutes);
 app.use('/search', searchRoutes);
+app.use("/analytics", analyticsRoutes);
+app.use("/favorites", favoriteRoutes);
+app.use("/host", hostProfilesRoutes);
+app.use("/host-messages", hostMessagesRoutes);
+
 
 // Error handler
 app.use(errorHandler);

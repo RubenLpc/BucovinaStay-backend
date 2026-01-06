@@ -1,9 +1,24 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const { listReviews, addReview } = require('../controllers/reviewController');
-const { protect, authorize } = require('../middlewares/auth');
 
-router.get('/:id/reviews', listReviews);
-router.post('/:id/reviews', protect, authorize('guest'), addReview);
+const { protect, authorize } = require("../middlewares/auth");
+// dacă nu ai fișier separat, folosește exact helper-ul tău din propertyRoutes (ori îl muți în middleware).
+
+const {
+  listPropertyReviews,
+  getMyReviewForProperty,
+  createReview,
+  deleteReview,
+} = require("../controllers/reviewController");
+
+// Public (cu optional auth dacă vrei să arăți extra info)
+router.get("/:id/reviews", listPropertyReviews);
+
+// Logged user
+router.get("/:id/reviews/me", protect, getMyReviewForProperty);
+router.post("/:id/reviews", protect, authorize("guest", "host", "admin"), createReview);
+
+// Optional delete
+router.delete("/:id/reviews/:reviewId", protect, deleteReview);
 
 module.exports = router;
