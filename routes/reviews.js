@@ -16,7 +16,7 @@ router.get("/:id/reviews", listPropertyReviews);
 
 // Logged user
 router.get("/:id/reviews/me", protect, getMyReviewForProperty);
-router.post("/:id/reviews", protect, authorize("guest", "host", "admin"), createReview);
+router.post("/:id/reviews", protect, createReview);
 
 // Optional delete
 router.delete("/:id/reviews/:reviewId", protect, deleteReview);

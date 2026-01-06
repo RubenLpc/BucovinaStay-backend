@@ -16,6 +16,8 @@ const favoriteRoutes = require('./routes/favorites');
 const analyticsRoutes = require('./routes/analytics');
 const hostProfilesRoutes =require("./routes/hostProfiles.js") ;
 const hostMessagesRoutes = require("./routes/hostMessages");
+const hostActivity = require("./routes/hostActivity");
+
 
 
 connectDB();
@@ -26,6 +28,7 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 // Mount routes
+app.use("/host/activity", hostActivity);
 app.use('/auth', authRoutes);
 app.use('/users', userRoutes);
 app.use('/properties', propertyRoutes);
@@ -36,6 +39,7 @@ app.use("/analytics", analyticsRoutes);
 app.use("/favorites", favoriteRoutes);
 app.use("/host", hostProfilesRoutes);
 app.use("/host-messages", hostMessagesRoutes);
+
 
 
 // Error handler

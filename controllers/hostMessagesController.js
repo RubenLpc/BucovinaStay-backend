@@ -1,5 +1,6 @@
 const HostMessage = require("../models/HostMessage");
 const Property = require("../models/Property");
+const { logHostActivity } = require("../services/activityLogger");
 
 // POST /api/host-messages  (public or auth optional)
 exports.sendMessageToHost = async (req, res) => {
@@ -27,6 +28,16 @@ guestEmail: req.user?._id ? (req.user.email || "").slice(0, 120) : (guestEmail |
 
     message: String(message).trim().slice(0, 1200),
   });
+
+  await logHostActivity({
+    hostId: property.hostId,
+    type: "message_received",
+    actor: "guest",
+    propertyId,
+    propertyTitle: property.title,
+    meta: { hasEmail: !!guestEmail, hasName: !!guestName },
+  });
+  
 
   res.status(201).json({ ok: true, id: String(doc._id) });
 };

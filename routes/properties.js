@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { getCloudinarySignature } = require("../controllers/uploadController");
+const requireHostProfileComplete = require("../middlewares/requireHostProfileComplete");
 
 
 const {
@@ -35,8 +36,8 @@ router.get("/", listProperties);
  *  -> mount this router also at /api/host/properties OR create a separate host router file
  */
 router.get("/host/me", protect, authorize("host", "admin"), listMyProperties);
-router.post("/host", protect, authorize("host", "admin"), createProperty);
-router.put("/host/:id", protect, authorize("host", "admin"), updateProperty);
+router.post("/host", protect,requireHostProfileComplete, authorize("host", "admin"), createProperty);
+router.put("/host/:id", protect,requireHostProfileComplete, authorize("host", "admin"), updateProperty);
 router.delete("/host/:id", protect, authorize("host", "admin"), deleteProperty);
 
 router.get("/host/upload-signature", protect, authorize("host", "admin"), getUploadSignature);
@@ -44,7 +45,7 @@ router.get("/host/upload-signature", protect, authorize("host", "admin"), getUpl
 router.post("/host/:id/images", protect, authorize("host", "admin"), attachImages);
 
 router.delete("/host/:id/images/:publicId", protect, authorize("host", "admin"), removeImage);
-router.post("/host/:id/submit", protect, authorize("host", "admin"), submitForReview);
+router.post("/host/:id/submit", protect,requireHostProfileComplete, authorize("host", "admin"), submitForReview);
 router.post("/host/:id/toggle-pause", protect, authorize("host", "admin"), togglePause);
 
 /**
@@ -55,8 +56,7 @@ router.post("/admin/:id/reject", protect, authorize("admin"), rejectProperty);
 
 
 
-router.post("/cloudinary-signature", protect, authorize("host","admin"), getCloudinarySignature);
-router.get("/highlights", getHighlights);
+router.get("/cloudinary-signature", protect, authorize("host","admin"), getCloudinarySignature);
 
 router.get("/:id", protectOptional, getProperty); // optional auth for draft preview by owner/admin
 

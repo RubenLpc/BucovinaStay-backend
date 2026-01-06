@@ -4,6 +4,7 @@ const HostProfile = require("../models/HostProfile");
 const { mapHostProfilePublic } = require("../mappers/hostProfileMapper");
 const { ensureHostProfileByUserId, recomputeHostStats } = require("../services/hostStatsService");
 const { recomputeSuperHost } = require("../services/superHostService");
+const { logHostActivity } = require("../services/activityLogger");
 
 
 
@@ -305,12 +306,19 @@ exports.submitForReview = async (req, res) => {
   if (property.status !== "draft" && property.status !== "rejected") {
     return res.status(400).json({ message: "Only Draft/Rejected can be submitted." });
   }
-
+  const prevStatus = property.status;
   property.status = "pending";
   property.submittedAt = new Date();
   property.rejectedAt = null;
   property.rejectionReason = null;
-
+  await logHostActivity({
+    hostId: property.hostId,              // sau req.user._id dacă e owner
+    type: "property_submitted",
+    actor: "host",
+    propertyId: property._id,
+    propertyTitle: property.title,
+    meta: { from: prevStatus, to: "pending" },
+  });
   await property.save();
   res.json(property);
 };
@@ -322,11 +330,20 @@ exports.togglePause = async (req, res) => {
 
   if (req.user._id.toString() !== property.hostId.toString())
     return res.status(403).json({ message: "Forbidden" });
-
+  const prevStatus = property.status;
   if (property.status === "live") property.status = "paused";
   else if (property.status === "paused") property.status = "live";
   else return res.status(400).json({ message: "Only Live/Paused can be toggled." });
-
+  const nextStatus = property.status;
+  await logHostActivity({
+    hostId: property.hostId,
+    type: nextStatus === "paused" ? "property_paused" : "property_resumed",
+    actor: "host",
+    propertyId: property._id,
+    propertyTitle: property.title,
+    meta: { from: prevStatus, to: nextStatus },
+  });
+  
   await property.save();
   res.json(property);
 };
@@ -339,11 +356,22 @@ exports.approveProperty = async (req, res) => {
   if (property.status !== "pending") {
     return res.status(400).json({ message: "Only Pending can be approved." });
   }
-
+  const prevStatus = property.status;
   property.status = "live";
   property.approvedAt = new Date();
   property.rejectedAt = null;
   property.rejectionReason = null;
+
+
+// ... după update:
+await logHostActivity({
+  hostId: property.hostId,              // sau req.user._id dacă e owner
+  type: "property_approved",
+  actor: "host",
+  propertyId: property._id,
+  propertyTitle: property.title,
+  meta: { from: prevStatus, to: "live" },
+});
 
   await property.save();
   await recomputeHostStats(property.hostId);
@@ -362,10 +390,21 @@ exports.rejectProperty = async (req, res) => {
   if (property.status !== "pending") {
     return res.status(400).json({ message: "Only Pending can be rejected." });
   }
-
+ const prevStatus = property.status;
   property.status = "rejected";
   property.rejectedAt = new Date();
   property.rejectionReason = (reason || "Necesită modificări.").slice(0, 300);
+
+
+// ... după update:
+await logHostActivity({
+  hostId: property.hostId,              // sau req.user._id dacă e owner
+  type: "property_rejected",
+  actor: "host",
+  propertyId: property._id,
+  propertyTitle: property.title,
+  meta: { from: prevStatus, to: "rejected" },
+});
 
   await property.save();
   res.json(property);
@@ -377,7 +416,14 @@ exports.deleteProperty = async (req, res) => {
   if (!property) return res.status(404).json({ message: "Property not found" });
 
   if (!isOwnerOrAdmin(req, property)) return res.status(403).json({ message: "Forbidden" });
-
+  await logHostActivity({
+    hostId: property.hostId,
+    type: "property_deleted",
+    actor: "host",
+    propertyId: property._id,
+    propertyTitle: property.title,
+  });
+  
   await property.deleteOne();
   res.status(204).send();
 };

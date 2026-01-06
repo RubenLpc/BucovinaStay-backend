@@ -47,7 +47,22 @@ exports.patchMyHostProfile = async (req, res, next) => {
     if (typeof patch.displayName === "string") allowed.displayName = patch.displayName.trim();
     if (typeof patch.avatarUrl === "string") allowed.avatarUrl = patch.avatarUrl.trim();
     if (typeof patch.bio === "string") allowed.bio = patch.bio.trim();
-    if (Array.isArray(patch.languages)) allowed.languages = patch.languages.map(String).slice(0, 10);
+
+    if (Array.isArray(patch.languages)) {
+      allowed.languages = patch.languages.map(String).slice(0, 10);
+    }
+
+    // Opțional: dacă vrei editabile manual
+    if (typeof patch.responseRate === "number") {
+      allowed.responseRate = Math.max(0, Math.min(100, patch.responseRate));
+    }
+    if (typeof patch.responseTimeBucket === "string") {
+      allowed.responseTimeBucket = patch.responseTimeBucket;
+    }
+
+    // hostingSince: eu aș recomanda să NU fie client-editable.
+    // dacă chiar vrei:
+    // if (patch.hostingSince) allowed.hostingSince = new Date(patch.hostingSince);
 
     const updated = await HostProfile.findOneAndUpdate(
       { userId: user._id },
@@ -60,3 +75,4 @@ exports.patchMyHostProfile = async (req, res, next) => {
     next(err);
   }
 };
+

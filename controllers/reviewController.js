@@ -1,6 +1,8 @@
 const Review = require("../models/Review");
 const Property = require("../models/Property");
 const mongoose = require("mongoose");
+const { recomputeHostStats } = require("../services/hostStatsService");
+const { recomputeSuperHost } = require("../services/superHostService");
 
 
 // helper: recalc ratingAvg & reviewsCount (vizibile)
