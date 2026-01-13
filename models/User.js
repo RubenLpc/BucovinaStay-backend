@@ -7,6 +7,8 @@ const userSchema = new mongoose.Schema({
   name: { type: String, required: true },
   phone: { type: String },
   role: { type: String, enum: ['guest', 'host', 'admin'], default: 'guest' },
+  disabled: { type: Boolean, default: false, index: true },
+
 }, { timestamps: true });
 
 // Hash password

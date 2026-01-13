@@ -2,17 +2,39 @@ const Property = require("../models/Property");
 const cloudinary = require("../utils/cloudinary");
 const HostProfile = require("../models/HostProfile");
 const { mapHostProfilePublic } = require("../mappers/hostProfileMapper");
-const { ensureHostProfileByUserId, recomputeHostStats } = require("../services/hostStatsService");
+const {
+  ensureHostProfileByUserId,
+  recomputeHostStats,
+} = require("../services/hostStatsService");
 const { recomputeSuperHost } = require("../services/superHostService");
 const { logHostActivity } = require("../services/activityLogger");
 
+const buildText = require("../utils/propertyEmbeddingText");
+const { embedText } = require("../services/embeddingsService");
 
+const AdminSettings = require("../models/AdminSettings");
+
+async function getSettings() {
+  const s = await AdminSettings.findOne({}).lean();
+  return s || {};
+}
 
 const isOwnerOrAdmin = (req, property) => {
   const isOwner = req.user?._id?.toString() === property.hostId?.toString();
   const isAdmin = req.user?.role === "admin";
   return isOwner || isAdmin;
 };
+
+async function upsertEmbeddingForProperty(propertyDoc) {
+  const text = buildText(propertyDoc);
+  const embedding = await embedText(text);
+  if (propertyDoc.embeddingText && propertyDoc.embeddingText === text && propertyDoc.embedding?.length) {
+    return false; // no change
+  }
+
+  propertyDoc.embeddingText = text; // opțional
+  propertyDoc.embedding = embedding; // IMPORTANT
+}
 
 // PUBLIC: list live properties
 exports.listProperties = async (req, res) => {
@@ -64,7 +86,8 @@ exports.listProperties = async (req, res) => {
   if (sort === "priceDesc") sortObj = { pricePerNight: -1 };
   if (sort === "ratingDesc") sortObj = { ratingAvg: -1, reviewsCount: -1 };
   if (sort === "newest") sortObj = { createdAt: -1 };
-  if (sort === "recommended") sortObj = { ratingAvg: -1, reviewsCount: -1, createdAt: -1 };
+  if (sort === "recommended")
+    sortObj = { ratingAvg: -1, reviewsCount: -1, createdAt: -1 };
 
   const items = await Property.find(filter)
     .sort(sortObj)
@@ -78,20 +101,26 @@ exports.listProperties = async (req, res) => {
 
 // PUBLIC: get one (live only unless owner/admin)
 exports.getProperty = async (req, res) => {
-  const property = await Property.findById(req.params.id).populate("hostId", "name phone");
+  const property = await Property.findById(req.params.id).populate(
+    "hostId",
+    "name phone"
+  );
   if (!property) return res.status(404).json({ message: "Property not found" });
 
   // public can see only live
   const isLive = property.status === "live";
   if (!isLive) {
-    if (!req.user) return res.status(404).json({ message: "Property not found" });
+    if (!req.user)
+      return res.status(404).json({ message: "Property not found" });
     // dacă vrei să limitezi: if (!isOwnerOrAdmin(req, property)) return res.status(403).json({ message: "Forbidden" });
   }
 
   // ✅ ia HostProfile (public) pe baza hostId
   let host = null;
   if (property.hostId) {
-    const profile = await HostProfile.findOne({ userId: property.hostId._id || property.hostId }).lean();
+    const profile = await HostProfile.findOne({
+      userId: property.hostId._id || property.hostId,
+    }).lean();
     if (profile) host = mapHostProfilePublic(profile);
     else {
       // fallback minimal (ca să nu fie null în UI)
@@ -108,7 +137,8 @@ exports.getProperty = async (req, res) => {
         reviewsCount: property.reviewsCount || 0, // dacă ai pe property
         rating: property.ratingAvg || null,
         monthsHosting: null,
-        disclaimer: "Acest anunț este oferit de o persoană fizică. Află mai multe",
+        disclaimer:
+          "Acest anunț este oferit de o persoană fizică. Află mai multe",
         disclaimerHref: "",
       };
     }
@@ -117,7 +147,6 @@ exports.getProperty = async (req, res) => {
   // ✅ în loc de res.json(property)
   res.json({ property, host });
 };
-
 
 // HOST: list my properties (all statuses)
 exports.listMyProperties = async (req, res) => {
@@ -158,6 +187,20 @@ exports.createProperty = async (req, res) => {
       status: "draft",
     };
 
+    const hostId = req.user._id;
+
+    const s = await getSettings();
+    const max = Number(s?.limits?.maxListingsPerHost || 0);
+
+    if (max > 0) {
+      const count = await Property.countDocuments({ hostId });
+      if (count >= max) {
+        return res.status(403).json({
+          message: `Limit reached: max ${max} listings per host`,
+        });
+      }
+    }
+
     // 1) Map latitude/longitude -> geo
     const hasLatLng =
       req.body?.latitude != null &&
@@ -190,7 +233,11 @@ exports.createProperty = async (req, res) => {
     }
 
     // 3) coverImage fallback dacă ai imagini și nu ai coverImage
-    if (!payload.coverImage && Array.isArray(payload.images) && payload.images.length > 0) {
+    if (
+      !payload.coverImage &&
+      Array.isArray(payload.images) &&
+      payload.images.length > 0
+    ) {
       payload.coverImage = {
         url: payload.images[0].url,
         publicId: payload.images[0].publicId,
@@ -222,20 +269,26 @@ exports.createProperty = async (req, res) => {
   }
 };
 
-
-
 // HOST: update my property (but prevent direct status hacking)
 // HOST: update my property (but prevent direct status hacking)
 exports.updateProperty = async (req, res) => {
   try {
     const property = await Property.findById(req.params.id);
-    if (!property) return res.status(404).json({ message: "Property not found" });
+    if (!property)
+      return res.status(404).json({ message: "Property not found" });
 
-    if (!isOwnerOrAdmin(req, property)) return res.status(403).json({ message: "Forbidden" });
+    if (!isOwnerOrAdmin(req, property))
+      return res.status(403).json({ message: "Forbidden" });
 
     // 1) Host nu are voie să seteze status etc (admin poate)
     if (req.user.role !== "admin") {
-      const forbidden = ["status", "approvedAt", "rejectedAt", "rejectionReason", "submittedAt"];
+      const forbidden = [
+        "status",
+        "approvedAt",
+        "rejectedAt",
+        "rejectionReason",
+        "submittedAt",
+      ];
       forbidden.forEach((k) => {
         if (k in req.body) delete req.body[k];
       });
@@ -275,14 +328,33 @@ exports.updateProperty = async (req, res) => {
     }
 
     // 5) coverImage fallback dacă ai imagini și nu ai coverImage
-    if (!property.coverImage && Array.isArray(property.images) && property.images.length > 0) {
+    if (
+      !property.coverImage &&
+      Array.isArray(property.images) &&
+      property.images.length > 0
+    ) {
       property.coverImage = {
         url: property.images[0].url,
         publicId: property.images[0].publicId,
       };
     }
+    const shouldReembed =
+      property.status === "live" &&
+      ("title" in req.body ||
+        "subtitle" in req.body ||
+        "description" in req.body ||
+        "city" in req.body ||
+        "locality" in req.body ||
+        "type" in req.body ||
+        "facilities" in req.body ||
+        "capacity" in req.body);
+
+    if (shouldReembed) {
+      await upsertEmbeddingForProperty(property);
+    }
 
     await property.save();
+
     return res.json(property);
   } catch (err) {
     console.error("updateProperty error:", err);
@@ -292,7 +364,6 @@ exports.updateProperty = async (req, res) => {
     });
   }
 };
-
 
 // HOST: submit for review (draft -> pending)
 exports.submitForReview = async (req, res) => {
@@ -304,7 +375,9 @@ exports.submitForReview = async (req, res) => {
     return res.status(403).json({ message: "Forbidden" });
 
   if (property.status !== "draft" && property.status !== "rejected") {
-    return res.status(400).json({ message: "Only Draft/Rejected can be submitted." });
+    return res
+      .status(400)
+      .json({ message: "Only Draft/Rejected can be submitted." });
   }
   const prevStatus = property.status;
   property.status = "pending";
@@ -312,7 +385,7 @@ exports.submitForReview = async (req, res) => {
   property.rejectedAt = null;
   property.rejectionReason = null;
   await logHostActivity({
-    hostId: property.hostId,              // sau req.user._id dacă e owner
+    hostId: property.hostId, // sau req.user._id dacă e owner
     type: "property_submitted",
     actor: "host",
     propertyId: property._id,
@@ -333,7 +406,10 @@ exports.togglePause = async (req, res) => {
   const prevStatus = property.status;
   if (property.status === "live") property.status = "paused";
   else if (property.status === "paused") property.status = "live";
-  else return res.status(400).json({ message: "Only Live/Paused can be toggled." });
+  else
+    return res
+      .status(400)
+      .json({ message: "Only Live/Paused can be toggled." });
   const nextStatus = property.status;
   await logHostActivity({
     hostId: property.hostId,
@@ -343,7 +419,7 @@ exports.togglePause = async (req, res) => {
     propertyTitle: property.title,
     meta: { from: prevStatus, to: nextStatus },
   });
-  
+
   await property.save();
   res.json(property);
 };
@@ -361,21 +437,21 @@ exports.approveProperty = async (req, res) => {
   property.approvedAt = new Date();
   property.rejectedAt = null;
   property.rejectionReason = null;
-
-
-// ... după update:
-await logHostActivity({
-  hostId: property.hostId,              // sau req.user._id dacă e owner
-  type: "property_approved",
-  actor: "host",
-  propertyId: property._id,
-  propertyTitle: property.title,
-  meta: { from: prevStatus, to: "live" },
-});
-
+  await upsertEmbeddingForProperty(property);
   await property.save();
+
+  // ... după update:
+  await logHostActivity({
+    hostId: property.hostId, // sau req.user._id dacă e owner
+    type: "property_approved",
+    actor: "host",
+    propertyId: property._id,
+    propertyTitle: property.title,
+    meta: { from: prevStatus, to: "live" },
+  });
+
   await recomputeHostStats(property.hostId);
-await recomputeSuperHost(property.hostId);
+  await recomputeSuperHost(property.hostId);
 
   res.json(property);
 };
@@ -390,21 +466,20 @@ exports.rejectProperty = async (req, res) => {
   if (property.status !== "pending") {
     return res.status(400).json({ message: "Only Pending can be rejected." });
   }
- const prevStatus = property.status;
+  const prevStatus = property.status;
   property.status = "rejected";
   property.rejectedAt = new Date();
   property.rejectionReason = (reason || "Necesită modificări.").slice(0, 300);
 
-
-// ... după update:
-await logHostActivity({
-  hostId: property.hostId,              // sau req.user._id dacă e owner
-  type: "property_rejected",
-  actor: "host",
-  propertyId: property._id,
-  propertyTitle: property.title,
-  meta: { from: prevStatus, to: "rejected" },
-});
+  // ... după update:
+  await logHostActivity({
+    hostId: property.hostId, // sau req.user._id dacă e owner
+    type: "property_rejected",
+    actor: "host",
+    propertyId: property._id,
+    propertyTitle: property.title,
+    meta: { from: prevStatus, to: "rejected" },
+  });
 
   await property.save();
   res.json(property);
@@ -415,7 +490,8 @@ exports.deleteProperty = async (req, res) => {
   const property = await Property.findById(req.params.id);
   if (!property) return res.status(404).json({ message: "Property not found" });
 
-  if (!isOwnerOrAdmin(req, property)) return res.status(403).json({ message: "Forbidden" });
+  if (!isOwnerOrAdmin(req, property))
+    return res.status(403).json({ message: "Forbidden" });
   await logHostActivity({
     hostId: property.hostId,
     type: "property_deleted",
@@ -423,7 +499,7 @@ exports.deleteProperty = async (req, res) => {
     propertyId: property._id,
     propertyTitle: property.title,
   });
-  
+
   await property.deleteOne();
   res.status(204).send();
 };
@@ -460,11 +536,26 @@ exports.getUploadSignature = async (req, res) => {
   });
 };
 
-
 exports.attachImages = async (req, res) => {
   const { id } = req.params;
   const { images, coverPublicId } = req.body;
   // images: [{ url, publicId, width, height, format, bytes }]
+
+  const s = await AdminSettings.findOne({}).lean();
+  const maxImages = Number(s?.limits?.maxImagesPerListing || 20);
+
+  const prop = await Property.findById(req.params.id)
+    .select("images hostId")
+    .lean();
+  if (!prop) return res.status(404).json({ message: "Not found" });
+  if (String(prop.hostId) !== String(req.user._id))
+    return res.status(403).json({ message: "Forbidden" });
+
+  if ((prop.images?.length || 0) >= maxImages) {
+    return res
+      .status(403)
+      .json({ message: `Max images per listing: ${maxImages}` });
+  }
 
   const property = await Property.findById(id);
   if (!property) return res.status(404).json({ message: "Property not found" });
@@ -472,7 +563,8 @@ exports.attachImages = async (req, res) => {
   // only owner/admin
   const isOwner = req.user._id.toString() === property.hostId.toString();
   const isAdmin = req.user.role === "admin";
-  if (!isOwner && !isAdmin) return res.status(403).json({ message: "Forbidden" });
+  if (!isOwner && !isAdmin)
+    return res.status(403).json({ message: "Forbidden" });
 
   if (!Array.isArray(images) || images.length === 0) {
     return res.status(400).json({ message: "images[] required" });
@@ -507,14 +599,13 @@ exports.attachImages = async (req, res) => {
   // allow setting cover by publicId
   if (coverPublicId) {
     const found = property.images.find((i) => i.publicId === coverPublicId);
-    if (found) property.coverImage = { url: found.url, publicId: found.publicId };
+    if (found)
+      property.coverImage = { url: found.url, publicId: found.publicId };
   }
 
   await property.save();
   res.json(property);
 };
-
-
 
 exports.removeImage = async (req, res) => {
   const { id, publicId } = req.params;
@@ -524,7 +615,8 @@ exports.removeImage = async (req, res) => {
 
   const isOwner = req.user._id.toString() === property.hostId.toString();
   const isAdmin = req.user.role === "admin";
-  if (!isOwner && !isAdmin) return res.status(403).json({ message: "Forbidden" });
+  if (!isOwner && !isAdmin)
+    return res.status(403).json({ message: "Forbidden" });
 
   // remove from DB
   property.images = property.images.filter((img) => img.publicId !== publicId);
@@ -532,7 +624,9 @@ exports.removeImage = async (req, res) => {
   // if cover removed -> reset
   if (property.coverImage?.publicId === publicId) {
     const first = property.images[0];
-    property.coverImage = first ? { url: first.url, publicId: first.publicId } : undefined;
+    property.coverImage = first
+      ? { url: first.url, publicId: first.publicId }
+      : undefined;
   }
 
   await property.save();
@@ -546,7 +640,6 @@ exports.removeImage = async (req, res) => {
 
   res.json(property);
 };
-
 
 exports.getHighlights = async (req, res) => {
   const limit = Math.min(24, Math.max(1, Number(req.query.limit) || 12));
@@ -591,4 +684,84 @@ exports.getHighlights = async (req, res) => {
   }));
 
   res.json({ items: mapped });
+};
+
+
+
+
+
+function cosineSimilarity(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return -1;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i], y = b[i];
+    dot += x * y;
+    na += x * x;
+    nb += y * y;
+  }
+  return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-12);
+}
+
+// GET /api/properties/semantic?q=...
+exports.semanticSearch = async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    if (!q) return res.status(400).json({ message: "Missing q" });
+
+    const qEmb = await embedText(q);
+
+    // ia un pool rezonabil (pentru proiect; dacă ai mii, treci la Atlas Vector Search)
+    const pool = await Property.find({
+      status: "live",
+      embedding: { $exists: true, $ne: null, $not: { $size: 0 } },
+    })
+      .select({
+        title: 1,
+        subtitle: 1,
+        city: 1,
+        locality: 1,
+        county: 1,
+        type: 1,
+        pricePerNight: 1,
+        currency: 1,
+        capacity: 1,
+        facilities: 1,
+        coverImage: 1,
+        images: 1,
+        ratingAvg: 1,
+        reviewsCount: 1,
+        createdAt: 1,
+        embedding: 1,
+      })
+      .limit(600) // ajustabil
+      .lean();
+
+    const scored = pool
+      .map((p) => ({
+        p,
+        score: cosineSimilarity(qEmb, p.embedding),
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 20);
+
+    // map exact cum vrea HorizontalListings (id, title, location, image, etc.)
+    const items = scored.map(({ p, score }) => ({
+      id: String(p._id),
+      title: p.title,
+      location: p.locality || p.city || "—",
+      pricePerNight: p.pricePerNight,
+      currency: p.currency || "RON",
+      rating: p.ratingAvg || 0,
+      reviews: p.reviewsCount || 0,
+      amenities: p.facilities || [],
+      guests: p.capacity || 0,
+      createdAt: p.createdAt,
+      image: p.coverImage?.url || p.images?.[0]?.url || "",
+      aiScore: Number(score.toFixed(4)),
+    }));
+
+    res.json({ q, items });
+  } catch (e) {
+    res.status(500).json({ message: "Semantic search failed", error: e.message || String(e) });
+  }
 };

@@ -18,7 +18,11 @@ function mapHostProfilePublic(profile) {
 
   return {
     id: String(profile.userId),
+
+    // ✅ compat: trimitem și name, și displayName
     name: profile.displayName,
+    displayName: profile.displayName,
+
     avatarUrl: profile.avatarUrl || "",
     bio: profile.bio || "",
 
@@ -26,15 +30,20 @@ function mapHostProfilePublic(profile) {
     verified: Boolean(profile.verified),
 
     responseRate: profile.responseRate ?? null,
+    responseTimeBucket: profile.responseTimeBucket || "unknown", // ✅ util în UI
     responseTimeText: responseTimeText(profile.responseTimeBucket),
 
     reviewsCount: profile.stats?.reviewsCount ?? 0,
     rating: profile.stats?.ratingAvg ?? null,
     monthsHosting: monthsBetween(profile.hostingSince),
 
+    // ✅ IMPORTANT: LIMBI
+    languages: Array.isArray(profile.languages) ? profile.languages : [],
+
     disclaimer: "Acest anunț este oferit de o persoană fizică. Află mai multe",
     disclaimerHref: "",
   };
 }
-
-module.exports = { mapHostProfilePublic };
+module.exports = {
+  mapHostProfilePublic,
+};

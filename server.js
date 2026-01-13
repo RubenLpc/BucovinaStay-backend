@@ -4,6 +4,7 @@ const morgan = require('morgan');
 const cors = require('cors');
 const connectDB = require('./config/db');
 const errorHandler = require('./middlewares/errorHandler');
+const maintenanceGuard = require("./middlewares/maintenance");
 
 // Routes
 const authRoutes = require('./routes/auth');
@@ -17,6 +18,12 @@ const analyticsRoutes = require('./routes/analytics');
 const hostProfilesRoutes =require("./routes/hostProfiles.js") ;
 const hostMessagesRoutes = require("./routes/hostMessages");
 const hostActivity = require("./routes/hostActivity");
+const hostSettingsRoutes = require("./routes/hostSettings");
+const adminRoutes = require('./routes/admin');
+const optionalAuth = require('./middlewares/optionalAuth');
+const healthRoutes = require("./routes/health");
+const semanticSearchRoutes = require("./routes/semanticSearch");
+
 
 
 
@@ -28,6 +35,13 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 // Mount routes
+app.use(optionalAuth); // ✅ pune req.user dacă există token
+
+app.use(
+    maintenanceGuard({
+      allow: ["/admin", "/auth", "/health"],
+    })
+  );
 app.use("/host/activity", hostActivity);
 app.use('/auth', authRoutes);
 app.use('/users', userRoutes);
@@ -39,7 +53,10 @@ app.use("/analytics", analyticsRoutes);
 app.use("/favorites", favoriteRoutes);
 app.use("/host", hostProfilesRoutes);
 app.use("/host-messages", hostMessagesRoutes);
-
+app.use("/host-settings", hostSettingsRoutes);
+app.use('/admin', adminRoutes);
+app.use("/health", healthRoutes);
+app.use("/search", semanticSearchRoutes);
 
 
 // Error handler

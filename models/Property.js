@@ -21,13 +21,7 @@ const propertySchema = new mongoose.Schema(
     // Core content
     title: { type: String, required: true, trim: true, maxlength: 90 },
     subtitle: { type: String, trim: true, maxlength: 60 }, // UI helper
-    slug: {
-      type: String,
-      trim: true,
-      lowercase: true,
-      index: true,
-    },
-    
+  
     description: { type: String, required: true, trim: true, maxlength: 4000 },
 
     type: { type: String, enum: TYPES, required: true, index: true },
@@ -83,6 +77,11 @@ coverImage: {
     approvedAt: { type: Date },
     rejectedAt: { type: Date },
     rejectionReason: { type: String, maxlength: 300 },
+
+
+    embedding: { type: [Number], default: null, index: false },
+embeddingText: { type: String, default: "" }, // opțional, util pt debug
+
 
     // Optional: păstrezi look-ul card-ului
     ratingAvg: { type: Number, default: 0, min: 0, max: 5 },
