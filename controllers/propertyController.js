@@ -2,6 +2,8 @@ const Property = require("../models/Property");
 const cloudinary = require("../utils/cloudinary");
 const HostProfile = require("../models/HostProfile");
 const { mapHostProfilePublic } = require("../mappers/hostProfileMapper");
+const { notifyAdmin } = require("../services/adminNotifier");
+
 const {
   ensureHostProfileByUserId,
   recomputeHostStats,
@@ -55,7 +57,35 @@ exports.listProperties = async (req, res) => {
 
   if (city) filter.city = city;
   if (type) filter.type = type;
+  const { minRating, neLat, neLng, swLat, swLng } = req.query;
 
+  if (minRating != null && Number(minRating) > 0) {
+    filter.ratingAvg = { $gte: Number(minRating) };
+  }
+  
+  if (neLat && neLng && swLat && swLng) {
+    const neLatN = Number(neLat), neLngN = Number(neLng);
+    const swLatN = Number(swLat), swLngN = Number(swLng);
+  
+    if ([neLatN, neLngN, swLatN, swLngN].every(Number.isFinite)) {
+      filter.geo = {
+        $geoWithin: {
+          $geometry: {
+            type: "Polygon",
+            coordinates: [[
+              [swLngN, swLatN],
+              [neLngN, swLatN],
+              [neLngN, neLatN],
+              [swLngN, neLatN],
+              [swLngN, swLatN],
+            ]],
+          },
+        },
+      };
+    }
+  }
+  
+  
   if (priceMin || priceMax) {
     filter.pricePerNight = {};
     if (priceMin) filter.pricePerNight.$gte = Number(priceMin);
@@ -179,6 +209,19 @@ exports.listMyProperties = async (req, res) => {
 
 // HOST: create draft
 // HOST: create draft
+const normalizeGeo = (geo) => {
+  if (!geo) return null;
+  if (geo.type !== "Point") return null;
+  const c = geo.coordinates;
+  if (!Array.isArray(c) || c.length !== 2) return null;
+
+  const lng = Number(c[0]);
+  const lat = Number(c[1]);
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+
+  return { type: "Point", coordinates: [lng, lat] };
+};
+
 exports.createProperty = async (req, res) => {
   try {
     const payload = {
@@ -187,21 +230,15 @@ exports.createProperty = async (req, res) => {
       status: "draft",
     };
 
-    const hostId = req.user._id;
-
-    const s = await getSettings();
-    const max = Number(s?.limits?.maxListingsPerHost || 0);
-
-    if (max > 0) {
-      const count = await Property.countDocuments({ hostId });
-      if (count >= max) {
-        return res.status(403).json({
-          message: `Limit reached: max ${max} listings per host`,
-        });
-      }
+    // 1) Acceptă geo direct (din map picker)
+    if ("geo" in req.body) {
+      const geo = normalizeGeo(req.body.geo);
+      if (geo) payload.geo = geo;
+      else if (req.body.geo === null) payload.geo = undefined; // șterge dacă trimite null
+      else payload.geo = undefined;
     }
 
-    // 1) Map latitude/longitude -> geo
+    // 2) Backward compatibility: latitude/longitude -> geo
     const hasLatLng =
       req.body?.latitude != null &&
       req.body?.longitude != null &&
@@ -211,49 +248,36 @@ exports.createProperty = async (req, res) => {
     if (hasLatLng) {
       const lat = Number(req.body.latitude);
       const lng = Number(req.body.longitude);
-
       if (Number.isFinite(lat) && Number.isFinite(lng)) {
         payload.geo = { type: "Point", coordinates: [lng, lat] };
       }
-
       delete payload.latitude;
       delete payload.longitude;
     }
 
-    // 2) Normalize geo (NU permite geo incomplet)
+    // 3) Cleanup final (nu salva geo incomplet)
     const coords = payload?.geo?.coordinates;
     const okCoords =
       Array.isArray(coords) &&
       coords.length === 2 &&
       Number.isFinite(coords[0]) &&
       Number.isFinite(coords[1]);
+    if (!okCoords) delete payload.geo;
 
-    if (!okCoords) {
-      delete payload.geo;
-    }
-
-    // 3) coverImage fallback dacă ai imagini și nu ai coverImage
-    if (
-      !payload.coverImage &&
-      Array.isArray(payload.images) &&
-      payload.images.length > 0
-    ) {
-      payload.coverImage = {
-        url: payload.images[0].url,
-        publicId: payload.images[0].publicId,
-      };
+    // cover fallback
+    if (!payload.coverImage && Array.isArray(payload.images) && payload.images.length > 0) {
+      payload.coverImage = { url: payload.images[0].url, publicId: payload.images[0].publicId };
     }
 
     const property = new Property(payload);
 
-    // 4) Safety net (în caz că schema/ defaults au introdus geo incomplet)
+    // safety net
     const coords2 = property?.geo?.coordinates;
     const ok2 =
       Array.isArray(coords2) &&
       coords2.length === 2 &&
       Number.isFinite(coords2[0]) &&
       Number.isFinite(coords2[1]);
-
     if (!ok2) property.geo = undefined;
 
     await property.save();
@@ -268,6 +292,7 @@ exports.createProperty = async (req, res) => {
     });
   }
 };
+
 
 // HOST: update my property (but prevent direct status hacking)
 // HOST: update my property (but prevent direct status hacking)
@@ -296,6 +321,29 @@ exports.updateProperty = async (req, res) => {
 
     // 2) Aplică update-urile
     Object.assign(property, req.body);
+
+    const normalizeGeo = (geo) => {
+      if (!geo) return null;
+      if (geo.type !== "Point") return null;
+      const c = geo.coordinates;
+      if (!Array.isArray(c) || c.length !== 2) return null;
+    
+      const lng = Number(c[0]);
+      const lat = Number(c[1]);
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+    
+      return { type: "Point", coordinates: [lng, lat] };
+    };
+    
+    // după Object.assign(...)
+    if ("geo" in req.body) {
+      if (req.body.geo === null) property.geo = undefined; // permite ștergere pin
+      else {
+        const g = normalizeGeo(req.body.geo);
+        property.geo = g || undefined;
+      }
+    }
+    
 
     // 3) Map latitude/longitude -> geo (după assign, ca să nu fie suprascris)
     const hasLatLng =
@@ -392,25 +440,39 @@ exports.submitForReview = async (req, res) => {
     propertyTitle: property.title,
     meta: { from: prevStatus, to: "pending" },
   });
+  await notifyAdmin({
+    type: "listing_pending",
+    severity: "warn",
+    title: "Listing nou pentru review",
+    body: `${property.title} a fost trimis la verificare.`,
+    entityType: "property",
+    entityId: property._id,
+    meta: { propertyTitle: property.title, hostId: property.hostId },
+  });
   await property.save();
   res.json(property);
 };
 
 // HOST: pause/resume (live <-> paused)
 exports.togglePause = async (req, res) => {
-  const property = await Property.findById(req.params.id);
+  const property = await Property.findById(req.params.id).select("hostId status title");
   if (!property) return res.status(404).json({ message: "Property not found" });
 
   if (req.user._id.toString() !== property.hostId.toString())
     return res.status(403).json({ message: "Forbidden" });
+
   const prevStatus = property.status;
-  if (property.status === "live") property.status = "paused";
-  else if (property.status === "paused") property.status = "live";
-  else
-    return res
-      .status(400)
-      .json({ message: "Only Live/Paused can be toggled." });
-  const nextStatus = property.status;
+
+  let nextStatus = null;
+  if (prevStatus === "live") nextStatus = "paused";
+  else if (prevStatus === "paused") nextStatus = "live";
+  else return res.status(400).json({ message: "Only Live/Paused can be toggled." });
+
+  await Property.updateOne(
+    { _id: property._id, hostId: property.hostId },
+    { $set: { status: nextStatus, updatedAt: new Date() } }
+  );
+
   await logHostActivity({
     hostId: property.hostId,
     type: nextStatus === "paused" ? "property_paused" : "property_resumed",
@@ -420,8 +482,9 @@ exports.togglePause = async (req, res) => {
     meta: { from: prevStatus, to: nextStatus },
   });
 
-  await property.save();
-  res.json(property);
+  // dacă vrei să returnezi obiectul actualizat:
+  const updated = await Property.findById(property._id);
+  res.json(updated);
 };
 
 // ADMIN: approve (pending -> live)
@@ -449,7 +512,16 @@ exports.approveProperty = async (req, res) => {
     propertyTitle: property.title,
     meta: { from: prevStatus, to: "live" },
   });
-
+  await notifyAdmin({
+    type: "listing_published",
+    severity: "info",
+    title: "Listing publicat",
+    body: `${property.title} este acum live.`,
+    entityType: "property",
+    entityId: property._id,
+    meta: { propertyTitle: property.title },
+  });
+  
   await recomputeHostStats(property.hostId);
   await recomputeSuperHost(property.hostId);
 
@@ -480,7 +552,16 @@ exports.rejectProperty = async (req, res) => {
     propertyTitle: property.title,
     meta: { from: prevStatus, to: "rejected" },
   });
-
+  await notifyAdmin({
+    type: "listing_rejected",
+    severity: "bad",
+    title: "Listing respins",
+    body: `${property.title} — motiv: ${reason || "n/a"}`,
+    entityType: "property",
+    entityId: property._id,
+    meta: { propertyTitle: property.title, reason },
+  });
+  
   await property.save();
   res.json(property);
 };

@@ -12,6 +12,7 @@ const HostMessageSchema = new Schema(
     // dacă guest e public, permiți nume/email
     guestName: { type: String, trim: true, maxlength: 80, default: "" },
     guestEmail: { type: String, trim: true, maxlength: 120, default: "" },
+    guestPhone: { type: String, trim: true, maxlength: 24, default: "" },
 
     message: { type: String, trim: true, required: true, minlength: 10, maxlength: 1200 },
 

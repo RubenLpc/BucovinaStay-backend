@@ -1,18 +1,81 @@
 const mongoose = require("mongoose");
 
 const FACILITIES = [
+  // Essentials
   "wifi",
+  "heating",
+  "hotWater",
+  "towels",
+  "bedLinen",
+  "hairDryer",
+  "essentials",
+
+  // Parking & access
   "parking",
-  "breakfast",
-  "petFriendly",
-  "spa",
+  "freeStreetParking",
+  "privateEntrance",
+  "selfCheckIn",
+
+  // Kitchen & dining
   "kitchen",
+  "fridge",
+  "stove",
+  "oven",
+  "microwave",
+  "coffeeMaker",
+  "kettle",
+  "dishesAndCutlery",
+  "bbq",
+
+  // Comfort & indoor
   "ac",
-  "sauna",
   "fireplace",
+  "washer",
+  "iron",
+  "workspace",
+
+  // Entertainment
+  "tv",
+  "streaming",
+  "boardGames",
+
+  // Family
+  "crib",
+  "highChair",
+
+  // Outdoor / view
+  "terrace",
+  "garden",
+  "mountainView",
+
+  // Wellness
+  "sauna",
+  "hotTub",
+  "spa",
+
+  // Services
+  "breakfast",
+
+  // Pets
+  "petFriendly",
+
+  // Safety
+  "smokeAlarm",
+  "fireExtinguisher",
+  "firstAidKit",
+  "cctvOutside",
 ];
 
-const TYPES = ["pensiune", "cabana", "hotel", "apartament", "vila", "tiny_house"];
+
+const TYPES = [
+  "pensiune",
+  "cabana",
+  "hotel",
+  "apartament",
+  "studio",
+  "vila",
+  "tiny_house",
+];
 
 const propertySchema = new mongoose.Schema(
   {
@@ -34,9 +97,17 @@ const propertySchema = new mongoose.Schema(
     addressLine: { type: String, trim: true },
 
     geo: {
-      type: { type: String, enum: ["Point"] },   // <- fără default
-      coordinates: { type: [Number] },           // <- fără default
+      type: { type: String, enum: ["Point"],     default: undefined,   // ✅ NU default Point
+      },
+      coordinates: {
+        type: [Number], // [lng, lat]
+        validate: {
+          validator: (v) => !v || v.length === 2,
+          message: "Geo coordinates must be [lng, lat]",
+        },
+      },
     },
+    
     
 
     // Pricing & capacity
@@ -119,5 +190,7 @@ propertySchema.virtual("image").get(function () {
 propertySchema.virtual("amenities").get(function () {
   return this.facilities || [];
 });
+
+propertySchema.index({ facilities: 1 });
 
 module.exports = mongoose.model("Property", propertySchema);

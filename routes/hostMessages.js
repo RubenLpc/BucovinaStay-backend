@@ -8,6 +8,8 @@ const {
   getMyInbox,
   markRead,
   getUnreadCount,
+  markUnread,
+  markAllRead,
 } = require("../controllers/hostMessagesController");
 
 const router = express.Router();
@@ -20,6 +22,10 @@ router.get("/unread-count", protect, getUnreadCount);
 
 // Host inbox
 router.get("/inbox", protect, getMyInbox);
+
+router.patch("/read-all", protect, markAllRead);
 router.patch("/:id/read", protect, markRead);
+router.patch("/:id/unread", protect, markUnread);
+
 
 module.exports = router;
