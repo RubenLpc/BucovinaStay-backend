@@ -119,10 +119,30 @@ exports.listProperties = async (req, res) => {
   if (sort === "recommended")
     sortObj = { ratingAvg: -1, reviewsCount: -1, createdAt: -1 };
 
-  const items = await Property.find(filter)
-    .sort(sortObj)
-    .skip((pageNum - 1) * limitNum)
-    .limit(limitNum);
+  const raw = await Property.find(filter)
+  .sort(sortObj)
+  .skip((pageNum - 1) * limitNum)
+  .limit(limitNum)
+  .lean();
+
+const items = raw.map((p) => ({
+  id: String(p._id),
+  title: p.title,
+  city: p.city,
+  locality: p.locality,
+  type: p.type,
+  pricePerNight: p.pricePerNight,
+  currency: p.currency || "RON",
+  capacity: p.capacity,
+  facilities: p.facilities || [],
+  ratingAvg: p.ratingAvg || 0,
+  reviewsCount: p.reviewsCount || 0,
+  geo: p.geo || null,
+  coverImage: p.coverImage || null,
+  images: p.images || [],
+  createdAt: p.createdAt,
+}));
+
 
   const total = await Property.countDocuments(filter);
 
