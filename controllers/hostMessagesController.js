@@ -78,7 +78,7 @@ exports.sendMessageToHost = async (req, res) => {
     message: text.slice(0, 1200),
   });
 
-  if (notifyMessages) {
+  
     await logHostActivity({
       hostId: property.hostId,
       type: "message_received",
@@ -88,11 +88,7 @@ exports.sendMessageToHost = async (req, res) => {
       meta: { hasEmail: !!finalEmail, hasName: !!finalName, hasPhone: !!finalPhone },
     });
 
-    // aici e locul perfect și pentru:
-    // - socket emit către host
-    // - email către host
-    // - push notification
-  }
+  
   res.status(201).json({ ok: true, id: String(doc._id) });
 };
 
@@ -138,8 +134,18 @@ exports.markRead = async (req, res) => {
 
 
 exports.getUnreadCount = async (req, res) => {
-  const count = await HostMessage.countDocuments({ hostId: req.user._id, status: "new" });
-  res.json({ count });
+  const hostId = req.user?._id;
+  if (!hostId) return res.status(401).json({ message: "Unauthorized" });
+
+  const settings = await getHostSettings(hostId);
+
+  // 🔕 dacă userul a oprit notificările de mesaje => nu arăta badge
+  if (settings?.notifications?.messages === false) {
+    return res.json({ count: 0, suppressed: true });
+  }
+
+  const count = await HostMessage.countDocuments({ hostId, status: "new" });
+  res.json({ count, suppressed: false });
 };
 
 

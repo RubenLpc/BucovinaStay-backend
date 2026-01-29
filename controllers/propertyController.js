@@ -230,6 +230,17 @@ exports.createProperty = async (req, res) => {
       status: "draft",
     };
 
+    const settings = await getSettings();
+const maxListings = Number(settings?.limits?.maxListingsPerHost || 0);
+
+if (maxListings > 0) {
+  const current = await Property.countDocuments({ hostId: req.user._id });
+  if (current >= maxListings) {
+    return res.status(403).json({ message: `Max listings per host: ${maxListings}` });
+  }
+}
+
+
     // 1) Acceptă geo direct (din map picker)
     if ("geo" in req.body) {
       const geo = normalizeGeo(req.body.geo);
@@ -432,6 +443,8 @@ exports.submitForReview = async (req, res) => {
   property.submittedAt = new Date();
   property.rejectedAt = null;
   property.rejectionReason = null;
+
+  
   await logHostActivity({
     hostId: property.hostId, // sau req.user._id dacă e owner
     type: "property_submitted",
@@ -457,6 +470,20 @@ exports.submitForReview = async (req, res) => {
 exports.togglePause = async (req, res) => {
   const property = await Property.findById(req.params.id).select("hostId status title");
   if (!property) return res.status(404).json({ message: "Property not found" });
+
+  const settings = await getSettings();
+
+  
+
+  const isOwner = req.user._id.toString() === property.hostId.toString();
+  const admin = isAdmin(req);
+
+  if (!isOwner) {
+    if (!admin) return res.status(403).json({ message: "Forbidden" });
+    if (!settings?.moderation?.allowAdminPause) {
+      return res.status(403).json({ message: "Admin pause is disabled by settings." });
+    }
+  }
 
   if (req.user._id.toString() !== property.hostId.toString())
     return res.status(403).json({ message: "Forbidden" });
@@ -530,7 +557,18 @@ exports.approveProperty = async (req, res) => {
 
 // ADMIN: reject (pending -> rejected)
 exports.rejectProperty = async (req, res) => {
+  const settings = await getSettings();
+
+  if (!settings?.moderation?.allowAdminReject) {
+    return res.status(403).json({ message: "Admin reject is disabled by settings." });
+  }
+
+  const minLen = Number(settings?.moderation?.minRejectionReasonLength ?? 10);
   const { reason } = req.body;
+
+  if (reason.length < minLen) {
+    return res.status(400).json({ message: `Reason too short (min ${minLen}).` });
+  }
 
   const property = await Property.findById(req.params.id);
   if (!property) return res.status(404).json({ message: "Property not found" });
