@@ -22,6 +22,11 @@ router.patch("/reviews/:id", protect, authorize("admin"), admin.patchReview);
 // optional hard delete:
 router.delete("/reviews/:id", protect, authorize("admin"), admin.deleteReview);
 
+router.get("/trails", protect, authorize("admin"), admin.listTrails);
+router.post("/trails/import", protect, authorize("admin"), admin.importTrails);
+router.post("/trails", protect, authorize("admin"), admin.createTrail);
+router.put("/trails/:id", protect, authorize("admin"), admin.updateTrail);
+router.delete("/trails/:id", protect, authorize("admin"), admin.deleteTrail);
 
 
 module.exports = router;

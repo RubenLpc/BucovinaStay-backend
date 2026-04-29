@@ -3,9 +3,14 @@ const mongoose = require("mongoose");
 const User = require("../models/User");
 const Property = require("../models/Property");
 const Review = require("../models/Review");
+const Trail = require("../models/Trail");
 const AnalyticsEvent = require("../models/AnalyticsEvent");
 const AdminSettings = require("../models/AdminSettings");
 const { clearMaintenanceCache } = require("../middlewares/maintenance");
+const cloudinary = require("../utils/cloudinary");
+
+const TRAIL_DIFFICULTIES = ["Ușor", "Mediu", "Greu"];
+const TRAIL_STATUSES = ["draft", "published", "archived"];
 
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
@@ -20,6 +25,229 @@ function pick(obj, keys) {
 function supportEmailValid(v) {
   if (!v) return true;
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v).trim());
+}
+
+function isValidHttpUrl(v) {
+  try {
+    const url = new URL(String(v || "").trim());
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function slugifyTrail(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 180);
+}
+
+async function ensureUniqueTrailSlug(base, excludeId = null) {
+  const clean = slugifyTrail(base) || `trail-${Date.now()}`;
+  let candidate = clean;
+  let index = 2;
+
+  while (true) {
+    const existing = await Trail.findOne({
+      slug: candidate,
+      ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+    })
+      .select("_id")
+      .lean();
+    if (!existing) return candidate;
+    candidate = `${clean}-${index++}`;
+  }
+}
+
+function normalizeTags(tags) {
+  const raw = Array.isArray(tags)
+    ? tags
+    : String(tags || "")
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
+
+  return Array.from(
+    new Set(
+      raw
+        .map((tag) => String(tag || "").trim().toLowerCase())
+        .filter(Boolean)
+        .slice(0, 12)
+    )
+  );
+}
+
+function normalizeOfficialLinks(links) {
+  if (!Array.isArray(links)) return [];
+  return links
+    .map((link) => ({
+      label: String(link?.label || "").trim(),
+      url: String(link?.url || "").trim(),
+    }))
+    .filter((link) => link.label && isValidHttpUrl(link.url))
+    .slice(0, 8);
+}
+
+function normalizeTrailImage(image) {
+  if (image === undefined) return undefined;
+  if (image === null || image === "") return null;
+
+  if (typeof image !== "object") {
+    throw new Error("Invalid image");
+  }
+
+  const out = {
+    url: String(image.url || "").trim(),
+    publicId: String(image.publicId || "").trim(),
+    width: image.width != null ? Number(image.width) : undefined,
+    height: image.height != null ? Number(image.height) : undefined,
+    format: image.format ? String(image.format).trim() : undefined,
+    bytes: image.bytes != null ? Number(image.bytes) : undefined,
+  };
+
+  if (!isValidHttpUrl(out.url) || !out.publicId) {
+    throw new Error("Invalid image");
+  }
+
+  return out;
+}
+
+function parseNullableNumber(value, label, { min = 0, max = 10000 } = {}) {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < min || num > max) {
+    throw new Error(`Invalid ${label}`);
+  }
+  return num;
+}
+
+function normalizeTrailPayload(body, { partial = false } = {}) {
+  const payload = {};
+  const source = body || {};
+
+  const name = source.name !== undefined ? String(source.name || "").trim() : undefined;
+  const area = source.area !== undefined ? String(source.area || "").trim() : undefined;
+  const difficulty =
+    source.difficulty !== undefined ? String(source.difficulty || "").trim() : undefined;
+  const sourceUrl =
+    source.sourceUrl !== undefined ? String(source.sourceUrl || "").trim() : undefined;
+
+  if (!partial || name !== undefined) {
+    if (!name) throw new Error("Name is required");
+    if (name.length > 140) throw new Error("Invalid name");
+    payload.name = name;
+  }
+
+  if (!partial || area !== undefined) {
+    if (!area) throw new Error("Area is required");
+    if (area.length > 140) throw new Error("Invalid area");
+    payload.area = area;
+  }
+
+  if (!partial || difficulty !== undefined) {
+    if (!TRAIL_DIFFICULTIES.includes(difficulty)) {
+      throw new Error("Invalid difficulty");
+    }
+    payload.difficulty = difficulty;
+  }
+
+  if (!partial || sourceUrl !== undefined) {
+    if (!isValidHttpUrl(sourceUrl)) throw new Error("Invalid sourceUrl");
+    payload.sourceUrl = sourceUrl;
+  }
+
+  if (source.slug !== undefined) {
+    const slug = slugifyTrail(source.slug);
+    if (!slug) throw new Error("Invalid slug");
+    payload.slug = slug;
+  }
+
+  if (source.status !== undefined) {
+    const status = String(source.status || "").trim();
+    if (!TRAIL_STATUSES.includes(status)) throw new Error("Invalid status");
+    payload.status = status;
+  }
+
+  if (source.seedId !== undefined) {
+    const seedId = String(source.seedId || "").trim();
+    if (seedId && seedId.length > 80) throw new Error("Invalid seedId");
+    payload.seedId = seedId || undefined;
+  }
+
+  if (source.sourceLabel !== undefined) {
+    const sourceLabel = String(source.sourceLabel || "").trim();
+    if (sourceLabel.length > 120) throw new Error("Invalid sourceLabel");
+    payload.sourceLabel = sourceLabel || "Sursă oficială";
+  }
+
+  if (source.summary !== undefined) {
+    const summary = String(source.summary || "").trim();
+    if (summary.length > 500) throw new Error("Invalid summary");
+    payload.summary = summary;
+  }
+
+  if (source.image !== undefined) {
+    payload.image = normalizeTrailImage(source.image);
+  }
+
+  if (source.imageFallbackUrl !== undefined) {
+    const imageFallbackUrl = String(source.imageFallbackUrl || "").trim();
+    if (imageFallbackUrl && !isValidHttpUrl(imageFallbackUrl)) {
+      throw new Error("Invalid imageFallbackUrl");
+    }
+    payload.imageFallbackUrl = imageFallbackUrl;
+  }
+
+  if (source.season !== undefined) {
+    const season = String(source.season || "").trim();
+    if (season.length > 120) throw new Error("Invalid season");
+    payload.season = season;
+  }
+
+  if (source.tags !== undefined) {
+    payload.tags = normalizeTags(source.tags);
+  }
+
+  if (source.officialLinks !== undefined) {
+    payload.officialLinks = normalizeOfficialLinks(source.officialLinks);
+  }
+
+  if (source.isVerified !== undefined) {
+    payload.isVerified = Boolean(source.isVerified);
+  }
+
+  const durationHrs = parseNullableNumber(source.durationHrs, "durationHrs", { min: 0, max: 240 });
+  if (durationHrs !== undefined) payload.durationHrs = durationHrs;
+
+  const distanceKm = parseNullableNumber(source.distanceKm, "distanceKm", { min: 0, max: 2000 });
+  if (distanceKm !== undefined) payload.distanceKm = distanceKm;
+
+  return payload;
+}
+
+function mapSeedTrail(item = {}) {
+  const officialLinks = normalizeOfficialLinks(item.officialLinks);
+  return {
+    seedId: String(item.id || "").trim() || undefined,
+    name: String(item.name || "").trim(),
+    area: String(item.area || "").trim(),
+    difficulty: String(item.difficulty || "").trim(),
+    durationHrs: item.durationHrs ?? null,
+    distanceKm: item.distanceKm ?? null,
+    season: String(item.season || "").trim(),
+    tags: normalizeTags(item.tags),
+    image: null,
+    imageFallbackUrl: String(item.image || "").trim(),
+    sourceUrl: String(item.url || "").trim(),
+    sourceLabel: officialLinks[0]?.label || "Sursă oficială",
+    officialLinks,
+    summary: "",
+  };
 }
 
 function labelForSetting(path) {
@@ -752,6 +980,202 @@ exports.deleteReview = async (req, res, next) => {
 
     res.json({ ok: true });
   } catch (err) {
+    next(err);
+  }
+};
+
+exports.listTrails = async (req, res, next) => {
+  try {
+    const page = clamp(parseInt(req.query.page || "1", 10), 1, 10_000);
+    const limit = clamp(parseInt(req.query.limit || "12", 10), 1, 100);
+    const q = String(req.query.q || "").trim();
+    const status = String(req.query.status || "all").trim();
+    const difficulty = String(req.query.difficulty || "all").trim();
+
+    const filter = {};
+    if (status !== "all") filter.status = status;
+    if (difficulty !== "all") filter.difficulty = difficulty;
+    if (q) {
+      filter.$or = [
+        { name: { $regex: q, $options: "i" } },
+        { area: { $regex: q, $options: "i" } },
+        { season: { $regex: q, $options: "i" } },
+        { tags: { $regex: q, $options: "i" } },
+        { sourceLabel: { $regex: q, $options: "i" } },
+      ];
+    }
+
+    const [items, total, counts] = await Promise.all([
+      Trail.find(filter)
+        .select(
+          "seedId name slug area difficulty durationHrs distanceKm season tags image imageFallbackUrl sourceUrl sourceLabel officialLinks summary status isVerified createdAt updatedAt"
+        )
+        .sort({ isVerified: -1, updatedAt: -1, name: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Trail.countDocuments(filter),
+      Trail.aggregate([
+        {
+          $group: {
+            _id: "$status",
+            count: { $sum: 1 },
+          },
+        },
+      ]),
+    ]);
+
+    const summary = {
+      total: counts.reduce((acc, row) => acc + Number(row.count || 0), 0),
+      draft: 0,
+      published: 0,
+      archived: 0,
+    };
+
+    for (const row of counts) {
+      if (summary[row._id] !== undefined) summary[row._id] = Number(row.count || 0);
+    }
+
+    res.json({ items, total, page, limit, summary });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.createTrail = async (req, res, next) => {
+  try {
+    const payload = normalizeTrailPayload(req.body, { partial: false });
+    payload.slug = await ensureUniqueTrailSlug(payload.slug || payload.name);
+    payload.createdBy = req.user?._id || null;
+    payload.updatedBy = req.user?._id || null;
+
+    const trail = await Trail.create(payload);
+    res.status(201).json({ trail });
+  } catch (err) {
+    if (err?.message?.startsWith("Invalid") || err?.message?.includes("required")) {
+      return res.status(400).json({ message: err.message });
+    }
+    next(err);
+  }
+};
+
+exports.updateTrail = async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid trail id" });
+    }
+
+    const existing = await Trail.findById(id).lean();
+    if (!existing) return res.status(404).json({ message: "Trail not found" });
+
+    const payload = normalizeTrailPayload(req.body, { partial: true });
+    const shouldRefreshSlug = payload.name && !payload.slug;
+    if (payload.slug || shouldRefreshSlug) {
+      payload.slug = await ensureUniqueTrailSlug(payload.slug || payload.name, id);
+    }
+    payload.updatedBy = req.user?._id || null;
+
+    const prevPublicId = existing.image?.publicId || null;
+    const nextPublicId =
+      payload.image === null ? null : payload.image?.publicId || existing.image?.publicId || null;
+
+    const trail = await Trail.findByIdAndUpdate(
+      id,
+      { $set: payload },
+      { new: true, runValidators: true }
+    ).lean();
+
+    if (prevPublicId && prevPublicId !== nextPublicId) {
+      cloudinary.uploader.destroy(prevPublicId).catch(() => {});
+    }
+
+    res.json({ trail });
+  } catch (err) {
+    if (err?.message?.startsWith("Invalid") || err?.message?.includes("required")) {
+      return res.status(400).json({ message: err.message });
+    }
+    next(err);
+  }
+};
+
+exports.deleteTrail = async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid trail id" });
+    }
+
+    const trail = await Trail.findByIdAndDelete(id).lean();
+    if (!trail) return res.status(404).json({ message: "Trail not found" });
+
+    if (trail.image?.publicId) {
+      cloudinary.uploader.destroy(trail.image.publicId).catch(() => {});
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.importTrails = async (req, res, next) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!items.length) {
+      return res.status(400).json({ message: "No trails provided for import" });
+    }
+
+    const normalized = [];
+    for (const item of items) {
+      const mapped = mapSeedTrail(item);
+      const payload = normalizeTrailPayload(mapped, { partial: false });
+      payload.seedId = mapped.seedId;
+      payload.slug = await ensureUniqueTrailSlug(mapped.name);
+      normalized.push(payload);
+    }
+
+    const seedIds = normalized.map((item) => item.seedId).filter(Boolean);
+    const existing = seedIds.length
+      ? await Trail.find({ seedId: { $in: seedIds } }).select("_id seedId status isVerified slug").lean()
+      : [];
+    const existingBySeedId = new Map(existing.map((item) => [item.seedId, item]));
+
+    const ops = normalized.map((item) => {
+      const prev = item.seedId ? existingBySeedId.get(item.seedId) : null;
+      const setPayload = {
+        ...item,
+        slug: prev?.slug || item.slug,
+        status: prev?.status || "draft",
+        isVerified: prev?.isVerified || false,
+        updatedBy: req.user?._id || null,
+      };
+
+      return {
+        updateOne: {
+          filter: item.seedId ? { seedId: item.seedId } : { slug: item.slug },
+          update: {
+            $set: setPayload,
+            $setOnInsert: { createdBy: req.user?._id || null },
+          },
+          upsert: true,
+        },
+      };
+    });
+
+    const result = await Trail.bulkWrite(ops, { ordered: false });
+    res.json({
+      imported: normalized.length,
+      created: Number(result.upsertedCount || 0),
+      updated:
+        Number(result.modifiedCount || 0) +
+        Number(result.matchedCount || 0) -
+        Number(result.upsertedCount || 0),
+    });
+  } catch (err) {
+    if (err?.message?.startsWith("Invalid") || err?.message?.includes("required")) {
+      return res.status(400).json({ message: err.message });
+    }
     next(err);
   }
 };

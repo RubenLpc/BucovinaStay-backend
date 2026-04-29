@@ -32,6 +32,7 @@ const healthRoutes = require("./routes/health");
 const semanticSearchRoutes = require("./routes/semanticSearch");
 const adminNotificationsRoutes = require("./routes/adminNotifications");
 const chatRoutes = require("./routes/chat");
+const trailsRoutes = require("./routes/trails");
 
 connectDB();
 const app = express();
@@ -182,6 +183,7 @@ app.use("/admin", adminRoutes);
 app.use("/health", healthRoutes);
 app.use("/notifications/admin", adminNotificationsRoutes);
 app.use("/chat", chatRoutes);
+app.use("/trails", trailsRoutes);
 
 /** ✅ Error handler last */
 app.use(errorHandler);
