@@ -31,9 +31,9 @@ const adminRoutes = require("./routes/admin");
 const healthRoutes = require("./routes/health");
 const semanticSearchRoutes = require("./routes/semanticSearch");
 const adminNotificationsRoutes = require("./routes/adminNotifications");
+const chatRoutes = require("./routes/chat");
 
 connectDB();
-
 const app = express();
 
 /** ✅ Render/proxy support */
@@ -116,7 +116,7 @@ app.use(optionalAuth);
 /** ✅ Maintenance gate */
 app.use(
   maintenanceGuard({
-    allow: ["/admin", "/auth", "/health"],
+    allow: ["/auth/login", "/health"],
   })
 );
 
@@ -151,6 +151,15 @@ app.use("/host-messages", writeLimiter);
 app.use("/reviews", writeLimiter); // dacă rutele sunt aici; altfel scoate
 app.use("/search", searchLimiter);
 
+const chatLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  message: { message: "Prea multe mesaje, încearcă mai târziu." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use("/chat", chatLimiter);
+
 /** ✅ Routes */
 app.use("/host/activity", hostActivity);
 app.use("/auth", authRoutes);
@@ -172,6 +181,7 @@ app.use("/host-settings", hostSettingsRoutes);
 app.use("/admin", adminRoutes);
 app.use("/health", healthRoutes);
 app.use("/notifications/admin", adminNotificationsRoutes);
+app.use("/chat", chatRoutes);
 
 /** ✅ Error handler last */
 app.use(errorHandler);

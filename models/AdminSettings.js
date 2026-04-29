@@ -25,6 +25,13 @@ const AdminSettingsSchema = new mongoose.Schema(
     },
 
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    changeLog: [
+      {
+        changedAt: { type: Date, default: Date.now },
+        changedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+        changes: [{ type: String, maxlength: 160 }],
+      },
+    ],
   },
   { timestamps: true }
 );

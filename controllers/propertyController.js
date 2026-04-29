@@ -21,6 +21,11 @@ async function getSettings() {
   return s || {};
 }
 
+function countValidImages(images) {
+  if (!Array.isArray(images)) return 0;
+  return images.filter((img) => img?.url && img?.publicId).length;
+}
+
 const isOwnerOrAdmin = (req, property) => {
   const isOwner = req.user?._id?.toString() === property.hostId?.toString();
   const isAdmin = req.user?.role === "admin";
@@ -182,7 +187,9 @@ exports.getProperty = async (req, res) => {
 exports.listMyProperties = async (req, res) => {
   const { page = 1, limit = 20, status, q } = req.query;
 
-  const filter = { hostId: req.user._id };
+  const baseFilter = { hostId: req.user._id };
+  const filter = { ...baseFilter };
+
   if (status && status !== "all") filter.status = status;
 
   if (q) {
@@ -197,14 +204,22 @@ exports.listMyProperties = async (req, res) => {
   const pageNum = Math.max(1, Number(page));
   const limitNum = Math.min(50, Math.max(1, Number(limit)));
 
-  const items = await Property.find(filter)
-    .sort({ updatedAt: -1 })
-    .skip((pageNum - 1) * limitNum)
-    .limit(limitNum);
+  const [items, total, aggCounts] = await Promise.all([
+    Property.find(filter).sort({ updatedAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum),
+    Property.countDocuments(filter),
+    Property.aggregate([
+      { $match: baseFilter },
+      { $group: { _id: "$status", count: { $sum: 1 } } },
+    ]),
+  ]);
 
-  const total = await Property.countDocuments(filter);
+  const statusCounts = { all: 0, draft: 0, pending: 0, live: 0, paused: 0, rejected: 0 };
+  aggCounts.forEach(({ _id, count }) => {
+    if (_id in statusCounts) statusCounts[_id] = count;
+    statusCounts.all += count;
+  });
 
-  res.json({ items, total, page: pageNum, limit: limitNum });
+  res.json({ items, total, page: pageNum, limit: limitNum, statusCounts });
 };
 
 // HOST: create draft
@@ -233,12 +248,17 @@ exports.createProperty = async (req, res) => {
     const settings = await getSettings();
 const maxListings = Number(settings?.limits?.maxListingsPerHost || 0);
 
-if (maxListings > 0) {
-  const current = await Property.countDocuments({ hostId: req.user._id });
-  if (current >= maxListings) {
-    return res.status(403).json({ message: `Max listings per host: ${maxListings}` });
-  }
-}
+    if (maxListings > 0) {
+      const current = await Property.countDocuments({ hostId: req.user._id });
+      if (current >= maxListings) {
+        return res.status(403).json({ message: `Max listings per host: ${maxListings}` });
+      }
+    }
+
+    const maxImages = Number(settings?.limits?.maxImagesPerListing || 20);
+    if (countValidImages(payload.images) > maxImages) {
+      return res.status(403).json({ message: `Max images per listing: ${maxImages}` });
+    }
 
 
     // 1) Acceptă geo direct (din map picker)
@@ -309,6 +329,7 @@ if (maxListings > 0) {
 // HOST: update my property (but prevent direct status hacking)
 exports.updateProperty = async (req, res) => {
   try {
+    const settings = await getSettings();
     const property = await Property.findById(req.params.id);
     if (!property)
       return res.status(404).json({ message: "Property not found" });
@@ -332,6 +353,11 @@ exports.updateProperty = async (req, res) => {
 
     // 2) Aplică update-urile
     Object.assign(property, req.body);
+
+    const maxImages = Number(settings?.limits?.maxImagesPerListing || 20);
+    if (countValidImages(property.images) > maxImages) {
+      return res.status(403).json({ message: `Max images per listing: ${maxImages}` });
+    }
 
     const normalizeGeo = (geo) => {
       if (!geo) return null;
@@ -476,7 +502,7 @@ exports.togglePause = async (req, res) => {
   
 
   const isOwner = req.user._id.toString() === property.hostId.toString();
-  const admin = isAdmin(req);
+  const admin = req.user?.role === "admin";
 
   if (!isOwner) {
     if (!admin) return res.status(403).json({ message: "Forbidden" });
@@ -484,9 +510,6 @@ exports.togglePause = async (req, res) => {
       return res.status(403).json({ message: "Admin pause is disabled by settings." });
     }
   }
-
-  if (req.user._id.toString() !== property.hostId.toString())
-    return res.status(403).json({ message: "Forbidden" });
 
   const prevStatus = property.status;
 

@@ -3,6 +3,10 @@ const AdminSettings = require("../models/AdminSettings");
 let cache = { at: 0, doc: null };
 const CACHE_MS = 10_000;
 
+function clearMaintenanceCache() {
+  cache = { at: 0, doc: null };
+}
+
 async function getSettingsCached() {
   const now = Date.now();
   if (cache.doc && now - cache.at < CACHE_MS) return cache.doc;
@@ -22,7 +26,8 @@ module.exports = function maintenanceGuard({ allow = [] } = {}) {
     try {
       const path = req.path || "";
       const allowed = allow.some((p) => path.startsWith(p));
-      if (allowed) return next();
+      const isAdmin = req.user?.role === "admin";
+      if (allowed || isAdmin) return next();
 
       const settings = await getSettingsCached();
       const branding = settings?.branding || {};
@@ -41,3 +46,5 @@ module.exports = function maintenanceGuard({ allow = [] } = {}) {
     }
   };
 };
+
+module.exports.clearMaintenanceCache = clearMaintenanceCache;

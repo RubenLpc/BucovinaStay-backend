@@ -5,6 +5,7 @@ const Property = require("../models/Property");
 const Review = require("../models/Review");
 const AnalyticsEvent = require("../models/AnalyticsEvent");
 const AdminSettings = require("../models/AdminSettings");
+const { clearMaintenanceCache } = require("../middlewares/maintenance");
 
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
@@ -14,6 +15,38 @@ function pick(obj, keys) {
   const out = {};
   for (const k of keys) if (obj[k] !== undefined) out[k] = obj[k];
   return out;
+}
+
+function supportEmailValid(v) {
+  if (!v) return true;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v).trim());
+}
+
+function labelForSetting(path) {
+  const labels = {
+    "moderation.requireSubmitToPublish": "Require submit to publish",
+    "moderation.allowAdminPause": "Allow admin pause",
+    "moderation.allowAdminReject": "Allow admin reject",
+    "moderation.allowAdminUnpublish": "Allow admin unpublish",
+    "moderation.minRejectionReasonLength": "Min rejection reason length",
+    "limits.maxListingsPerHost": "Max listings per host",
+    "limits.maxImagesPerListing": "Max images per listing",
+    "branding.supportEmail": "Support email",
+    "branding.maintenanceMode": "Maintenance mode",
+    "branding.maintenanceMessage": "Maintenance message",
+  };
+  return labels[path] || path;
+}
+
+function collectChangedPaths(current, incoming, section) {
+  const changes = [];
+  for (const [key, nextValue] of Object.entries(incoming || {})) {
+    const prevValue = current?.[key];
+    if (String(prevValue ?? "") !== String(nextValue ?? "")) {
+      changes.push(labelForSetting(`${section}.${key}`));
+    }
+  }
+  return changes;
 }
 
 exports.getOverview = async (req, res, next) => {
@@ -181,7 +214,24 @@ exports.listUsers = async (req, res, next) => {
       User.countDocuments(filter),
     ]);
 
-    res.json({ items, total, page, limit });
+    const userIds = items.map((u) => u._id);
+    const propertyCounts = userIds.length
+      ? await Property.aggregate([
+          { $match: { hostId: { $in: userIds } } },
+          { $group: { _id: "$hostId", count: { $sum: 1 } } },
+        ])
+      : [];
+
+    const countsMap = new Map(
+      propertyCounts.map((row) => [String(row._id), Number(row.count || 0)])
+    );
+
+    const enrichedItems = items.map((u) => ({
+      ...u,
+      listingsCount: countsMap.get(String(u._id)) || 0,
+    }));
+
+    res.json({ items: enrichedItems, total, page, limit });
   } catch (err) {
     next(err);
   }
@@ -435,10 +485,16 @@ exports.setPropertyStatus = async (req, res, next) => {
 
 // singleton
 async function getOrCreateSettings() {
-  let doc = await AdminSettings.findOne({}).lean();
+  let doc = await AdminSettings.findOne({})
+    .populate("updatedBy", "name email")
+    .populate("changeLog.changedBy", "name email")
+    .lean();
   if (!doc) {
     const created = await AdminSettings.create({});
-    doc = created.toObject();
+    doc = await AdminSettings.findById(created._id)
+      .populate("updatedBy", "name email")
+      .populate("changeLog.changedBy", "name email")
+      .lean();
   }
   return doc;
 }
@@ -511,9 +567,21 @@ exports.saveSettings = async (req, res, next) => {
       return res.status(400).json({ message: "Invalid maxListingsPerHost" });
     }
 
+    if (
+      branding.supportEmail !== undefined &&
+      (String(branding.supportEmail).length > 120 || !supportEmailValid(branding.supportEmail))
+    ) {
+      return res.status(400).json({ message: "Invalid supportEmail" });
+    }
+
     // get singleton doc (not lean, we want to save)
     let doc = await AdminSettings.findOne({});
     if (!doc) doc = await AdminSettings.create({});
+    const changeLabels = [
+      ...collectChangedPaths(doc.moderation?.toObject?.() || doc.moderation || {}, moderation, "moderation"),
+      ...collectChangedPaths(doc.limits?.toObject?.() || doc.limits || {}, limits, "limits"),
+      ...collectChangedPaths(doc.branding?.toObject?.() || doc.branding || {}, branding, "branding"),
+    ];
 
     if (Object.keys(moderation).length) {
       doc.moderation = {
@@ -547,9 +615,26 @@ exports.saveSettings = async (req, res, next) => {
     }
 
     doc.updatedBy = req.user?._id || null;
+    if (changeLabels.length) {
+      const nextLog = [
+        {
+          changedAt: new Date(),
+          changedBy: req.user?._id || null,
+          changes: changeLabels.slice(0, 12),
+        },
+        ...(doc.changeLog || []),
+      ].slice(0, 20);
+      doc.changeLog = nextLog;
+    }
     await doc.save();
+    clearMaintenanceCache?.();
 
-    res.json({ settings: doc.toObject() });
+    const populated = await AdminSettings.findById(doc._id)
+      .populate("updatedBy", "name email")
+      .populate("changeLog.changedBy", "name email")
+      .lean();
+
+    res.json({ settings: populated });
   } catch (err) {
     next(err);
   }
